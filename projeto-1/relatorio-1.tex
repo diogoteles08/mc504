@@ -1,0 +1,189 @@
+\documentclass[12pt,journal,compsoc]{IEEEtran}
+
+\hyphenation{op-tical net-works semi-conduc-tor}
+\usepackage{indentfirst}
+\usepackage{microtype}
+\usepackage{hyperref}
+
+\usepackage[utf8]{inputenc}
+\usepackage[portuguese]{babel}
+
+\begin{document}
+\title{Introdução ao Minix \\ Relatório do Projeto 1}
+\author{Diogo~T.~Sant'Anna,~\IEEEmembership{RA~169966,}
+        Luciano~G.~Zago,~\IEEEmembership{RA~182835,}
+        e~Maria~A.~Paulino,~\IEEEmembership{RA~183465}% <-this % stops a space
+}
+
+% The paper headers
+\markboth{MC504 - Sistemas Operacionais, 17~de~mar\c{c}o~de~2018}%
+{Shell \MakeLowercase{\textit{et al.}}: Introdu\c{c}\~ao ao Minix - Relat\'orio do Projeto 1}
+
+% make the title area
+\maketitle
+
+\begin{abstract}
+Este projeto teve por objetivo promover a familiarização com o ambiente do sistema operacional Minix 3, o qual foi emulado pelo QEMU. Ao longo ddeste relatório é descrito o processo para instalação do Minix, os problemas encontrados, soluções para esses e os meios adotados para resolução dos objetivos propostos no enunciado do projeto em questão - compilação do kernel, mudança da syscall exec e do banner do kernel e identificação da syscall 33 (que concluímos ser relacionada ao comando truncate(2)). Além disso, o projeto utilizou um versionamento GIT do GitLab do Instituto de Computação, configurado com um sistema de Continuous Integration para compilação do SO.
+\end{abstract}
+
+\IEEEdisplaynotcompsoctitleabstractindextext
+
+\IEEEpeerreviewmaketitle
+
+\section{Introdução}
+\IEEEPARstart{O} objetivo deste projeto é instalar o sistema operacional MINIX através de uma máquina virtual, e fazer algumas alterações em seu código fonte, a fim de conhecer a estrutura na prática de um sistema operacional e entender o seu funcionamento.
+
+O Minix foi desenvolvido por Andrew Tenenbaum para compensar a proibição da AT\&T contra o estudo de sistemas operacionais baseados em código UNIX e promover uma ferramenta de ensino para seus alunos. Originalmente, foi projetado para ser compatível com a versão 7 do UNIX e em seguida passou a ser desenvolvido baseado no padrão POSIX. O Minix foi escrito a partir do zero e mesmo sendo compatível com UNIX, não contém AT\&T possibilitando sua distribuição livre.
+
+O Minix 1 e 2 são entendidos como ferramenta de ensino. A versão 3 tem por objetivo se tornar usável um computadores com recursos limitados, sistemas embarcados e aplicações que demandam grande confiabilidade.
+
+O MINIX 3 é um sistema operacional gratuito, e open-source, projetado para ser confiável, flexível e seguro. Ele é descrito no livro ``Operating Systems: Design and Implementation 3nd Edition'' de Andrew S. Tanenbaum e Albert S. Woodhull.
+
+\section{Desenvolvimento}
+Como foi utilizado o QEMU\footnote{\url{https://www.qemu.org/}} para virtualizar o MINIX(3.4), os passos a seguir serão específicos para tal ferramenta.
+
+\subsection{Instalação: desafios e soluções}
+
+A seguir, será apontado o passo a passo executado pelo grupo e os obstáculos vistos em cada um desses. Em suma, seguiu-se o guia de instalação do MINIX\cite{runningQEMU:MINIX3}.
+
+Utilizamos o comando abaixo para criar a imagem da máquina virtual.
+\\\texttt{\$ qemu-img create minix.img 8G}
+
+Em seguida, inicializamos a máquina virtual com a ISO de instalação do MINIX\footnote{\url{http://download.minix3.org/iso/snapshot/}}, versão de maio de 2017, no CD-ROM.
+\\\texttt{\$ qemu-system-x86\_64 -localtime -net user -net nic -m 256 -cdrom minix.iso -hda minix.img -boot d}
+
+Após o boot da ISO, seguiu-se o script de instalação sem problemas. Em seguida, finalizou-se a sessão com o comando:\\\texttt{\# shutdown -h now}. 
+
+Inicializou-se novamente a máquina virtual, desta vez com o comando:
+\\\texttt{\$ qemu-system-x86\_64 -rtc base=utc -net user -net nic -m 256 -hda minix.img}
+
+Ao tentar prosseguir, integrantes do grupo observaram que não era possível utilizar a tecla `/' devido a escolha pelo teclado ABNT2 durante a instalação. Para resolver tal problema, alteramos o padrão para us-swap.
+\\\texttt{
+\# loadkeys /usr/lib/keymaps/\\us-swap.map\\
+\# cp /usr/lib/keymaps/us-swap.map /etc/keymap}
+
+O último comando foi utilizado para salvar a configuração feita.
+
+Depois de ter devidamente instalado o MINIX, optamos por clonar a imagem criada para ter um backup para o caso de algum teste comprometa a utilizada.
+
+Assim como indicado pelo guia de pós instalação do MINIX \cite{postInatalation:MINIX3}, inseriu-se uma senha para o usuário root com \texttt{\$ passwd}. Em seguida, proseguiu-se com a instalação de pacotes para facilitar o uso do sistema operacional, o primeiro escolhido teve por objetivo proporcionar o uso de acesso via ssh. Para isso, seguiu-se o processo descrito no site do sistema operacional\cite{installPackages:MINIX3} e no enunciado deste projeto, assim como a seguir.\\
+\texttt{
+\# pkgin update\\
+\# pkgin install openssh\\
+\# pkgin install rsync\\
+\# cp /usr/pkg/etc/rc.d/sshd /etc/rc.d/sshd\\
+\# etc/rc.d/sshd start\\
+\# printf `sshd=YES\textbackslash n' >> /etc/rc.conf}
+
+Além disso, em \texttt{etc/ssh/sshd\_config}, mudou-se o estado de \texttt{PermitirRootLogin} para \texttt{yes}\cite{sshConfig:github} a partir de:\\
+\texttt{\# printf `PermitirRootLogin yes' >> /usr/pkg/etc/ssh/sshd\_config}
+
+Para permitir uma conexão direta com o ambiente minix emulado na máquina através do simples comando \texttt{ssh minix}, fez-se a seguinte alteração no arquivo \texttt{.ssh/config} da máquina anfitriã:
+
+\begin{verbatim}
+Host minix
+    Hostname localhost
+    Port 10022
+    User root
+\end{verbatim}
+
+Sendo assim, precisamos alterar a forma de inicialização da máquina virtual para direcionar a porta 1022 da máquina anfitriã (nosso computador) para a porta 22 do minix, possibilitando a comunicação por ssh:\\
+\texttt{\# qemu-system-x86\_64 -rtc base=utc -net user,hostfwd=tcp::10022-:22 -net nic -m 256 -hda minix.img}
+
+A troca de arquivos entre os ambientes (simulado e realmente presente na máquina) é feita por \texttt{rsync -rptOv origem minix:destino}, que utiliza a configuração do ssh \texttt{minix:} para enviar arquivos à máquina virtual\cite{rsyncUse:cobweb}.
+
+\subsection{Estrutura do GIT}
+
+Na branch Master foi criado um diretório \texttt{projeto-1} e dentro deste, outro nomeado \texttt{minix} que contém código fonte do sistema operacional modificado. Como a estrutura dos arquivos do repositório foi alterada, alterou-se o arquivo \texttt{.gitlab-ci.yml} fornecido, que configura o Continuous Integration. A alteração feita foi substituir \texttt{--host-minix-source `pwd`} por \texttt{--host-minix-source `pwd`/projeto-1/minix}.
+
+Além disso, para o CI funcionar, foi necessário habilitar a opção \texttt{Enable shared Runners} em \texttt{Settings > CI/CD > Runner Settings}
+
+\subsection{Compilação do kernel}
+
+Antes de de fato conseguir compilar o kernel efetuado alguma modificação, tentou-se recompilá-lo sem efetuar nenhuma modifica\c{c}ão para validar o processo. 
+
+Primeiro tentou-se utilizando o comando \texttt{make build} dentro da pasta \texttt{/usr/src/}, mas a máquina virtual simplesmente parava no meio da execução. Tentou-se também o comando \texttt{make hdboot} na pasta  \texttt{/usr/src/releasetools}, mas a execução terminava em erro indicando arquivos faltantes ou incompletos da pasta \texttt{/usr/stc/minix/commands/fsck.mfs/} 
+
+Por fim membros do grupo conseguiram executar a compila\c{c}ão utilizando o comando \texttt{make build} ou somente \texttt{make} na pasta \texttt{/usr/src/}, seguido pelo comando \texttt{make hdboot} dentro da pasta \texttt{/usr/src/releasetools}. \cite{compilacaoKernel:wiki}
+
+O comando \texttt{make build} demorou 11 horas até ser finalizado. Já o \texttt{make hdboot}, que só compila e instala o kernel, demorou cerca de 30 minutos.
+
+\subsection{Mudança da syscall exec}
+
+Para encontrar o arquivo no qual é definida a syscall exec, começamos a procura pela pasta \texttt{/usr/src/minix/kernel} e lendo o conteúdo dos arquivos e principalmente os comentários chegamos ao arquivo \texttt{/usr/src/minix/kernel/system/} \texttt{do\_exec.c}. Alterando a função \texttt{do\_exec} conseguimos fazer o kernel imprimir o nome do arquivo executado cada vez que algo é executado, mas não conseguíamos obter o caminho completo para o diretório onde se encontrava o arquivo executável.
+
+Conseguimos encontrar o arquivo que inicia a execução de um processo, e que contem o caminho completo de diretórios do arquivo executável,  acidentalmente: enquanto pesquisávamos pela web sobre como localizar os números de uma syscall específica, encontramos um site\cite{instalacaoSyscall:puc-rio} que ensinava como criar uma syscall e dizia para inserir o arquivo contendo o código da syscall na pasta \texttt{/usr/src/minix/servers/vfs}.
+
+Depois disso entramos na pasta citada, vimos um arquivo relacionado a syscall exec  \texttt{/usr/src/minix/servers/vfs/exec.c}, no qual pudemos alterar a fun\c{c}ão \texttt{get\_read\_vp} inserindo uma linha com o comando \texttt{printf} para imprimir o nome completo do caminho de diretórios do arquivo executável (através da variável chamada \texttt{pathname}, um ponteiro para char / uma string).
+
+\subsection{Mudança do banner do kernel}
+
+Utilizando a função de pesquisa no repositório com a palavra \texttt{banner}, foi possível encontrar o comentário:\\
+\texttt{/* Display the MINIX startup \textit{banner}.*/}\\
+em \texttt{minix/kernel/main.c} na função \texttt{announce()}.
+Logo, para alterar o banner, foi preciso somente escrever no comando \texttt{printf} dentro do \texttt{announce()}.
+
+\subsection{Syscalls}
+Através de \cite{minixSyscalls:github} e \cite{minixSyscalls:Karthick}, foi possível entender a implementação das syscalls no MINIX e conhecer os arquivos que eram utilizados para isso.
+
+Assim, o arquivo \texttt{include/minix/callnr.h} contém as constantes com os nomes das syscalls e seus números. O arquivo \texttt{servers/pm/table.c} contém os nomes das funções relacionadas às syscalls.
+
+Portanto, a syscall 33 é relacionada à constante \texttt{VFS\_TRUNCATECALL}  que se refere ao comando \texttt{truncate(2)}.
+
+\section{Conclusão}
+Conseguimos alcan\c{c}ar os objetivos propostos pelo trabalho: navegando e conhecendo o Minix foi possível recompilar o kernel depois de alterá-lo conforme as exigências propostas. Conseguimos com sucesso localizar a syscall correspondente ao número 33 relacionando-a com o comando truncate(2), modificar o texto do banner do MINIX e fazer o SO imprimir o caminho do arquivo executável ao executar cada programa.
+
+O primeiro contato com o MINIX nos foi muito útil pois surgiram dificuldades em várias partes das configura\c{c}ões básicas do sistema.
+O trabalho demandou uma parcela do tempo navegando pelos diretórios e arquivos do kernel e do sistema operacional em geral, para nos familiarizarmos com a estrutura do SO, principalmente em busca dos arquivos específicos que nos ajudariam a resolver os problemas propostos pelo enunciado do projeto.
+
+Contribuiu também ao fornecer o primeiro contato com o GitLab do Instituto de Computa\c{c}ão\cite{repositorioIC:gitLab} e em especial com o Continuous Integration\cite{gitLabCI:gitLab}.
+
+\renewcommand\refname{Referências}
+\begin{thebibliography}{1}
+
+\bibitem{runningQEMU:MINIX3}
+\url{http://wiki.minix3.org/doku.php?id=usersguide:runningonqemu}
+
+\bibitem{postInatalation:MINIX3}
+\url{http://wiki.minix3.org/doku.php?id=usersguide:postinstallation}
+
+\bibitem{installPackages:MINIX3}
+\url{http://wiki.minix3.org/doku.php?id=releases:3.2.0:usersguide:installingbinarypackages}
+
+\bibitem{sshConfig:github}
+\url{https://gist.github.com/Drowze/2f7cbce35ade1fa94b2511f4138a32c2}
+
+\bibitem{rsyncUse:cobweb}
+\url{http://cobweb.cs.uga.edu/~maria/classes/4730-Fall-2016/project3minix-intro.html}
+
+\bibitem{minixSyscalls:github}
+\url{https://github.com/rhiguita/lab-minix/blob/master/pt\_br/Atividade2-Criando\_Uma\_Chamada\_de\_Sistema-Portuguese.txt}
+
+\bibitem{minixSyscalls:Karthick}
+Jayaraman, Karthick. \textit{How to Add a New System Call for Minix 3}. Department of Electrical Engineering \& Computer Science, Syracuse Univerity, Syracuse, New Your. Dispon\'ivel em: \url{http://www.cis.syr.edu/~wedu/seed/Labs/Documentation/Minix3/How_to_add_system_call.pdf}
+\bibitem{usoGIT:MINIX3}
+\url{http://wiki.minix3.org/doku.php?id=developersguide:usinggit}
+
+\bibitem{compliacao:MINIX3}
+\url{http://www.minix3.org/doc/A-312.html}
+
+\bibitem{compilacao:wiki}
+\url{http://wiki.minix3.org/doku.php?id=developersguide:trackingcurrent }
+
+\bibitem{compilacaoKernel:wiki}
+\url{http://wiki.minix3.org/doku.php?id=developersguide:rebuildingsystem}
+
+\bibitem{instalacaoSyscall:puc-rio}
+\url{http://www-di.inf.puc-rio.br/~endler//courses/inf1019/Minix/Instalacao_Syscall.pdf}
+
+\bibitem{repositorioIC:gitLab}
+\url{https://gitlab.ic.unicamp.br/}
+
+\bibitem{gitLabCI:gitLab}
+\url{https://about.gitlab.com/features/gitlab-ci-cd/}
+
+\end{thebibliography}
+
+\end{document}
+
+
