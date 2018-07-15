@@ -1,0 +1,263 @@
+image: $CI_REGISTRY/mc504/qemu-man:latest
+
+stages:
+  - build
+  - tests
+
+before_script:
+  # Compile script
+  ####
+  # compile.sh
+  ####
+  - echo "#! /bin/sh" > /home/compile.sh
+  - echo "set -e" >> /home/compile.sh
+  # These should be your commands
+  - echo "cd /usr/src" >> /home/compile.sh
+  - echo "make build MKUPDATE=yes" >> /home/compile.sh
+
+  # This part is needed if you want to reboot the machine within the test script (or stage). So it will reset the serial consoles and the boot config to restart and be handled by pexpect (within qemu-man script)
+  - echo "# Restore our configuration from .local" >> /home/compile.sh
+  - echo "cp ~/.local/gettytab /etc/gettytab" >> /home/compile.sh
+  - echo "cp ~/.local/ttys /etc/ttys" >> /home/compile.sh
+  - echo "cp ~/.local/boot.cfg /boot.cfg" >> /home/compile.sh
+
+  # Then you can put more commands
+  # For instance you can then reboot it and do some commands on other scripts
+  # - echo "shutdown -r now" >> /home/compile.sh
+  # - echo "echo $?" >> /home/script.sh
+  - chmod +x /home/compile.sh
+
+  # Another script that can be executed. This can be another test within the same stage.
+  ####
+  # script.sh
+  ####
+  - echo "#! /bin/sh" > /home/script.sh
+  - echo "set -e" >> /home/script.sh
+  - echo "pwd" >> /home/script.sh
+  - echo "ls -l" >> /home/script.sh
+  - echo "echo Finished script" >> /home/script.sh
+  - echo "echo $?" >> /home/script.sh
+  - chmod +x /home/script.sh
+
+  # A post-hook to get the built kernel from the guest
+  ####
+  # get-kernel.sh
+  ####
+  - echo "#! /bin/sh" > /home/get-kernel.sh
+  - echo "set -e" >> /home/get-kernel.sh
+  - echo "mkdir -p ./kernel/" >> /home/get-kernel.sh
+  # I get the files with the default port from the script (10022)
+  - echo rsync -rz -e \"ssh -p 10022\"  root@localhost:/boot/minix_latest/ ./kernel/  >> /home/get-kernel.sh
+  - chmod +x /home/get-kernel.sh
+
+  # A pre-hook to set a kernel into the guest
+  ####
+  # set-kernel.sh
+  ####
+  - echo "#! /bin/sh" > /home/set-kernel.sh
+  - echo "set -e" >> /home/set-kernel.sh
+  - echo rsync -rz -e \"ssh -p 10022\" ./kernel/ localhost:/boot/minix/new/  >> /home/set-kernel.sh
+  - chmod +x /home/set-kernel.sh
+
+  # A pre-hook to set new /usr/bin/ into the guest
+  ####
+  # set-usrbin.sh
+  ####
+  - echo "#! /bin/sh" > /home/set-usrbin.sh
+  - echo "set -e" >> /home/set-usrbin.sh
+  - echo rsync -rz -e \"ssh -p 10022\" ./usrbin/ localhost:/usr/bin/  >> /home/set-usrbin.sh
+  - chmod +x /home/set-usrbin.sh
+
+  # A post-hook to get the built /usr/bin/ from the guest
+  ####
+  # get-usrbin.sh
+  ####
+  - echo "#! /bin/sh" > /home/get-usrbin.sh
+  - echo "set -e" >> /home/get-usrbin.sh
+  - echo "mkdir -p ./usrbin/" >> /home/get-usrbin.sh
+  # I get the files with the default port from the script (10022)
+  - echo rsync -rz -e \"ssh -p 10022\"  root@localhost:/usr/bin/ ./usrbin/  >> /home/get-usrbin.sh
+  - chmod +x /home/get-usrbin.sh
+
+  # A restart script that sets the new kernel (notice that we need to perform different tasks on host and guest)
+  # Another option could be to use ssh to run this commands on the set-kernel.sh script
+  ####
+  # restart.sh
+  ####
+  - echo "#! /bin/sh" > /home/restart.sh
+  - echo "set -e" >> /home/restart.sh
+  - echo "rm /boot/minix_latest" >> /home/restart.sh
+  - echo "ln -s /boot/minix/new /boot/minix_latest" >> /home/restart.sh
+  - echo "shutdown -r now" >> /home/restart.sh
+  - chmod +x /home/restart.sh
+
+build:
+  stage: build
+  script:
+    # You can customize this line with different parameters if needed. Check the qemu-man repo for all the options
+    # This time I only compile, and then use a post-hook script to extract the kernel from the VM into the artifacts (to be available in the kernel later)
+    - python -u /qemu-man.py --guest-minix-source /usr/src --host-minix-source `pwd` --host-scripts "/home/compile.sh" --post-hook-scripts "/home/get-usrbin.sh,/home/get-kernel.sh" -st 8000
+    - exit $?
+  artifacts:
+    paths:
+      - ./usrbin/*
+      - ./kernel/*
+  tags:
+    # This tag is needed to run the virtualization (if you don't use it, the script will take forever)
+    - docker-kvm
+
+processDisplaying:
+  stage: tests
+  script:
+
+  - cp tests/usr.bin/padmon/processDisplaying.sh /home/script.sh
+  - chmod +x /home/script.sh
+
+  # Run the VM, but before 'install' the kernel using the pre-hook set-kernel. The script starts by rebooting the machine to launch the new kernel, and then it runs the script.sh
+  - python -u /qemu-man.py --guest-minix-source /usr/src --host-minix-source `pwd` --host-scripts "/home/restart.sh,/home/script.sh" --pre-hook-scripts "/home/set-usrbin.sh,/home/set-kernel.sh"
+
+  # It returns the exit code of the last process (script.sh)
+  - exit $?
+
+  # This dependency let us get the the artifacts from the previous stage
+  dependencies:
+    - build
+  tags:
+    - docker-kvm
+
+stateChanging:
+  stage: tests
+  script:
+
+  - cp tests/usr.bin/padmon/stateChanging.sh /home/script.sh
+  - chmod +x /home/script.sh
+
+  # Run the VM, but before 'install' the kernel using the pre-hook set-kernel. The script starts by rebooting the machine to launch the new kernel, and then it runs the script.sh
+  - python -u /qemu-man.py --guest-minix-source /usr/src --host-minix-source `pwd` --host-scripts "/home/restart.sh,/home/script.sh" --pre-hook-scripts "/home/set-usrbin.sh,/home/set-kernel.sh"
+
+  # It returns the exit code of the last process (script.sh)
+  - exit $?
+
+  # This dependency let us get the the artifacts from the previous stage
+  dependencies:
+    - build
+  tags:
+    - docker-kvm
+
+processKilling:
+  stage: tests
+  script:
+
+  - cp tests/usr.bin/padmon/processKilling.sh /home/script.sh
+  - chmod +x /home/script.sh
+
+  # Run the VM, but before 'install' the kernel using the pre-hook set-kernel. The script starts by rebooting the machine to launch the new kernel, and then it runs the script.sh
+  - python -u /qemu-man.py --guest-minix-source /usr/src --host-minix-source `pwd` --host-scripts "/home/restart.sh,/home/script.sh" --pre-hook-scripts "/home/set-usrbin.sh,/home/set-kernel.sh"
+
+  # It returns the exit code of the last process (script.sh)
+  - exit $?
+
+  # This dependency let us get the the artifacts from the previous stage
+  dependencies:
+    - build
+  tags:
+    - docker-kvm
+
+verbosePrinting:
+  stage: tests
+  script:
+
+  - cp tests/usr.bin/padmon/verbosePrinting.sh /home/script.sh
+  - chmod +x /home/script.sh
+
+  # Run the VM, but before 'install' the kernel using the pre-hook set-kernel. The script starts by rebooting the machine to launch the new kernel, and then it runs the script.sh
+  - python -u /qemu-man.py --guest-minix-source /usr/src --host-minix-source `pwd` --host-scripts "/home/restart.sh,/home/script.sh" --pre-hook-scripts "/home/set-usrbin.sh,/home/set-kernel.sh"
+
+  # It returns the exit code of the last process (script.sh)
+  - exit $?
+
+  # This dependency let us get the the artifacts from the previous stage
+  dependencies:
+    - build
+  tags:
+    - docker-kvm
+
+argumentsPositioning:
+  stage: tests
+  script:
+
+  - cp tests/usr.bin/padmon/argumentsPositioning.sh /home/script.sh
+  - chmod +x /home/script.sh
+
+  # Run the VM, but before 'install' the kernel using the pre-hook set-kernel. The script starts by rebooting the machine to launch the new kernel, and then it runs the script.sh
+  - python -u /qemu-man.py --guest-minix-source /usr/src --host-minix-source `pwd` --host-scripts "/home/restart.sh,/home/script.sh" --pre-hook-scripts "/home/set-usrbin.sh,/home/set-kernel.sh"
+
+  # It returns the exit code of the last process (script.sh)
+  - exit $?
+
+  # This dependency let us get the the artifacts from the previous stage
+  dependencies:
+    - build
+  tags:
+    - docker-kvm
+
+# spadmonCommunication:
+#  stage: tests
+#  script:
+
+#  - cp tests/usr.bin/padmon/spadmonCommunication.sh /home/script.sh
+#  - chmod +x /home/script.sh
+
+  # Run the VM, but before 'install' the kernel using the pre-hook set-kernel. The script starts by rebooting the machine to launch the new kernel, and then it runs the script.sh
+#  - python -u /qemu-man.py --guest-minix-source /usr/src --host-minix-source `pwd` --host-scripts "/home/restart.sh,/home/script.sh" --pre-hook-scripts "/home/set-usrbin.sh,/home/set-kernel.sh"
+
+  # It returns the exit code of the last process (script.sh)
+#  - exit $?
+
+  # This dependency let us get the the artifacts from the previous stage
+#  dependencies:
+#    - build
+#  tags:
+#    - docker-kvm
+
+failing:
+  stage: tests
+
+  script:
+
+  - cp tests/usr.bin/padmon/failing.sh /home/script.sh
+
+  - chmod +x /home/script.sh
+
+  # Run the VM, but before 'install' the kernel using the pre-hook set-kernel. The script starts by rebooting the machine to launch the new kernel, and then it runs the script.sh
+  - python -u /qemu-man.py --guest-minix-source /usr/src --host-minix-source `pwd` --host-scripts "/home/restart.sh,/home/script.sh" --pre-hook-scripts "/home/set-usrbin.sh,/home/set-kernel.sh"
+
+  # It returns the exit code of the last process (script.sh)
+  - exit $?
+
+  # This dependency let us get the the artifacts from the previous stage
+  dependencies:
+    - build
+  tags:
+    - docker-kvm
+    
+showHelp:
+  stage: tests
+
+  script:
+
+  - cp tests/usr.bin/padmon/showHelp.sh /home/script.sh
+
+  - chmod +x /home/script.sh
+
+  # Run the VM, but before 'install' the kernel using the pre-hook set-kernel. The script starts by rebooting the machine to launch the new kernel, and then it runs the script.sh
+  - python -u /qemu-man.py --guest-minix-source /usr/src --host-minix-source `pwd` --host-scripts "/home/restart.sh,/home/script.sh" --pre-hook-scripts "/home/set-usrbin.sh,/home/set-kernel.sh"
+
+  # It returns the exit code of the last process (script.sh)
+  - exit $?
+
+  # This dependency let us get the the artifacts from the previous stage
+  dependencies:
+    - build
+  tags:
+    - docker-kvm

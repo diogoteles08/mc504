@@ -1,0 +1,257 @@
+\documentclass[12pt,journal,compsoc]{IEEEtran}
+
+\usepackage{indentfirst}
+\usepackage{microtype}
+\usepackage{hyperref}
+
+\usepackage[utf8]{inputenc}
+\usepackage[portuguese]{babel}
+\usepackage{float}
+\restylefloat{table}
+
+\begin{document}
+% ========= Cabeçalho
+
+\markboth{MC504 - Sistemas Operacionais, 15 de maio de 2018}%
+{Shell \MakeLowercase{\textit{et al.}}: Administração de processos em Minix\\Relatório do Projeto 2}
+
+\title{Administração de processos em Minix\\Relatório do Projeto 2}
+\author{Diogo~T.~Sant'Anna,~\IEEEmembership{RA~169966,}
+        Luciano~G.~Zago,~\IEEEmembership{RA~182835,}
+        e~Maria~A.~Paulino,~\IEEEmembership{RA~183465}
+}
+\maketitle
+
+% ========= Resumo
+\begin{abstract}
+Este projeto teve por objetivo promover a familiarização com os modos de operação do sistema operacional e o funcionamento dos processos dentro desse. Para tal, foi  requerido projetar e implementar uma solução de software que seja capaz de administrar os estados dos processos de um sistema operacional. A aplicação deveria consistir de duas partes: a chamada padmon - nível usuário -  e spadmon - nível kernel. A execução do trabalho exigiu conhecimentos como a utilização de chamadas de sistema, passagem de parâmetros para essas e criação de servidor e syscalls. Por fim, foi possível desenvolver uma solução capaz de executar todas as funções exigidas no enunciado deste projeto.
+\end{abstract}
+
+\IEEEdisplaynotcompsoctitleabstractindextext
+
+\IEEEpeerreviewmaketitle
+
+% ========= Introdução
+\section{Introdução}
+\IEEEPARstart{A}s soluções implementada durante este projeto foram o \texttt{padmon} e \texttt{spadmon}.
+
+O \texttt{padmon} deve gerenciar as opções exigidas no enunciado e foi idealizado como sendo o programa responsável por intermediar a comunicação entre o usuário e o serviço \texttt{spadmon} responsável por realizar os serviços solicitados pelo usuário. Sendo assim, o \texttt{padmon} é responsável por:
+
+\begin{enumerate}
+\item Interpretar o requisitado pelo usuário, identificando possíveis erros e reportando-os diretamente.
+\item Devidamente redirecionar as requisições válidas para o serviço \texttt{spadmon} através de syscalls. 
+\item Identificar os retornos das syscalls, redirecionando os resultados ao usuário, possivelmente descrevendo os erros decorridos.
+\end{enumerate}
+
+Já o \texttt{spadmon}, consistia na criação de um server e syscalls que podem ser chamadas no programa do usuário citado anteriormente, e tiveram toda sua estrutura embasada no apresentado em \cite{service_tutorial:Heabuh} e \cite{criar_kernel_call:wikiMinix3} com pequenas alterações que podem ser observadas ao decorrer do desenvolvimento deste relatório.
+
+\section{Desenvolvimento}
+Como dito no enunciado deste projeto, a aplicação foi desenvolvida em duas partes, assim como explicitas a seguir.
+\subsection{Padmon: Aplicação Nível Usuário}
+
+\subsubsection{Projeto e implementação}
+
+Os programas de usuário são colocados no diretório \texttt{usr.bin}, logo possui o arquivo base da implementação \texttt{/usr.bin/padmon/padmon.c}. Além disso, este diretório se transforma em \texttt{/usr/bin/}, local padrão que permite a execução dos programas pelas chamadas da linha de comando, bastando chamar o programa diretamente pelo nome.
+
+Observamos também que é importante que o próprio programa \texttt{padmon} reporte os resultados ao usuário para que este tenha a liberdade de direcionar as saídas para onde desejar, por exemplo.
+
+%==========
+\subsubsection{Leitura de Argumentos}
+Para processamento dos argumentos recebidos, utilizou-se da função \texttt{getopt()}, proveniente do header file \texttt{unistd.h}\footnote{\url{http://pubs.opengroup.org/onlinepubs/7908799/xsh/unistd.h.html}}
+, para o tratamento de opções curtas. Esta função recebe como parâmetro um inteiro com a quantidade de argumentos, um um vetor de strings com os argumentos e uma string com a definição das opções aceitas pelo programa e seus respectivos formatos (flags ou não) \cite{getopt:DaemoioLabs}. Seu retorno é: -1 quando todas as opções foram conferidas, o carácter correspondente à opção desejada ou '?' quando a opção selecionada é inválida.
+
+Como \texttt{getopt()} é usado somente para comando simples, foi necessário verificar os argumentos recebidos em busca de instruções \texttt{-ps} e \texttt{-help} e simplificá-los a um único carácter. Além disso, para evitar problemas com a verbosidade, junto com a simplificação de argumentos citada acima, verificou-se a presença do carácter. Quando encontrado, este é retirado da string e uma flag que indica o uso de verbosidade é setada.
+
+%==========
+\subsubsection{Chamadas de sistema}
+O \texttt{padmon} se comunica com o \texttt{spadmon} através de 6 diferentes syscalls: uma delas solicitando a listagem dos processos no sistema (\texttt{padmon -ps}) e as outras cinco correspondendo à solicitação para mudar o estado de um dado processo. 
+As syscalls foram criadas no serviço do \texttt{spadmon} e recebem parâmetros por meio das messages, estruturas usadas pelo Minix para passagem de dados entre processos.
+
+%==========
+\subsubsection{Passagem de parâmetros (message)}
+A messages do Minix correspondem a uma union de structs que definem messages contendo componentes particulares para serem usados em diferentes contextos dentro do Minix. 
+Para a implementação das syscalls utilizamos duas structs diferentes, uma simples já implementada no Minix (mess\_1) e outra implementada por nós para melhor intercambiar os resultados do \texttt{padmon -ps}.
+
+Para a syscall correspondente ao \texttt{padmon -ps} utilizamos a message implementada como a seguir:
+
+\begin{verbatim}
+typedef struct {
+    vir_bytes pid_array;
+    vir_bytes status_array;
+    int length;
+    int fun_return;
+    uint8_t padding[40];
+} mess_spadmon_processes;
+\end{verbatim}
+
+Onde em \texttt{pid\_array} e \texttt{status\_array} o \texttt{padmon} insere o endereço para um array que o \texttt{spadmon} popula com os PIDs e status, respectivamente, dos processos encontrados no sistema operacional. O campo \texttt{length} é preenchido pelo \texttt{spadmon} com o número total de processos encontrados, e o campo \texttt{fun\_return} é utilizado para passar os retornos das syscalls.
+Para as outras syscalls, foi usado uma struct de mensagem que possui 3 campos para inteiros, dos quais um foi usado para passar o PID do processo de que se deseja alterar o estado.
+
+\subsubsection{Tratamento de erros: Retornos padrões}
+
+Como já mencionado, o \texttt{padmon} é responsável por devidamente chamar as syscall, interpretar seus retornos e direcionar o resultado ao usuário. Para isso convencionamos inteiros para representar e indicar possíveis erros nas syscalls, que portanto retornam um inteiro indicando como a chamada finalizou. Os números convencionados e seus respectivos significados são:
+
+\begin{table}[H]
+\renewcommand{\arraystretch}{1.3}
+\caption{Tabela de Retornos}
+\centering
+\begin{tabular}{c|c}
+    \hline
+    Código  &  Significado\\
+    \hline
+    \hline
+    0		&   Syscall terminou sem nenhum erro\\
+    \hline
+    1	    &   Não foi possível obter alguma das\\
+            &	tabelas de processos\\
+    \hline
+    2		&	Foi solicitado a mudança de estado\\
+    		&	para o estado em que o processo já\\
+            &	se encontra.\\
+    \hline
+    400		&	Houve uma solicitação inválida\\
+    \hline
+    404		&	Não foi encontrado o processo com\\
+    		&	o PID dado\\
+    \hline
+    500		&	Aconteceu algum erro imprevisto\\
+    \hline
+\end{tabular}
+\end{table}
+
+%==========
+\subsection{Spadmon: aplicação nível kernel}
+
+\subsubsection{Serviço do Minix}
+Para implementar um novo serviço no Minix, foi seguido um tutorial\cite{service_tutorial:Heabuh} à risca. O server \texttt{spadmon} localiza-se na pasta \texttt{/minix/servers/spadmon}. Ele se baseou na estrutura do server \texttt{ds}, para receber e enviar as messages das syscalls. Após a remoção de funções desnecessárias, o protótipo base do server \texttt{spadmon} foi criado. Foi necessário inclui-lo no Makefile da pasta \texttt{/minix/servers/}.
+
+Após isso, para adicionar o server no Minix, foi incluído no arquivo \texttt{/minix/include/com.h} a linha \texttt{\#define SPADMON\_PROC\_NR ((endpoint\_t) 11)}, antes de \texttt{LAST\_SPECIAL\_PROC\_NR}, e alterado seu valor de 11 para 12.
+
+Para adicionar o server ao kernel, foi necessário incluir no arquivo \texttt{/kernel/table.c} a linha \texttt{\{SPADMON\_PROC\_NR, "spadmon"\}}, no final da lista. E em \texttt{/servers/rs/table.c} adicionada abaixo de \texttt{PFS\_PROC\_NR} nas duas primeiras listas desse arquivo.
+
+Em \texttt{/etc/system.conf}, para darmos permissão ao nosso server, foi incluído o seguinte bloco:
+
+\begin{verbatim}
+service spadmon{
+    uid 0;
+    ipc ALL_SYS;
+    system  ALL:
+    vm  BASIC;
+    io  NONE;
+    irq NONE;
+    sigmgr    rs;
+    scheduler KERNEL;
+    priority  4;
+    quantum   500;
+};
+\end{verbatim}
+
+Para compilar o \texttt{spadmon}, foi necessário incluir no Makefile de \texttt{/releasetools/}, na lista de programas, após o \texttt{init}, a seguinte linha \texttt{PROGRAMS+= \$\{PROGROOT\}/servers/spadmon/spadmon}.
+Para o \texttt{padmon} ter permissão para enviar uma syscall ao \texttt{spadmon}, foi necessário remover em \texttt{/kernel/proc.c} o bloco de código referente à \texttt{if (call\_nr != RECEIVE)}
+
+\subsubsection{Criação das syscalls}
+
+Para implementar as syscalls do \texttt{spadmon}, foi seguido um tutorial\cite{implementar_syscall:exercicio}, porém foi necessário adaptá-lo para o nosso server, já que ele se referia à criação de syscalls para o \texttt{pm}. O \texttt{/minix/server/spadmon/table.c} mapeia os números das syscalls para os ponteiros das funções criadas em \texttt{/minix/server/spadmon/spadmon.c}, através de um vetor \texttt{call\_vec} e as constantes. Exemplo: \texttt{int (*call\_vec[])(void) = \{do\_spadmon\_ps, do\_spadmon\_r\}};
+
+Os números das syscalls foram escolhidos em \texttt{/minix/include/minix/callnr.h}, criando uma syscall para cada mudança de estado do \texttt{padmon} e para o \texttt{-ps}, seguindo o seguinte modelo: \texttt{\#define SPADMON\_PS (SPADMON\_BASE + 0)}, com \texttt{\#define SPADMON\_BASE 0x1B00}.
+
+Em \texttt{/minix/servers/spadmon/proto.h} foi definido os protótipos das funções utilizadas no \texttt{main.c}, \texttt{spadmon.c} e \texttt{table.c}. Todos esses arquivos foram incluídos no Makefile de \texttt{/minix/servers/spadmon/}.
+
+As novas syscalls podem ser chamadas no programa de usuário (\texttt{padmon}) através do seguinte comando \texttt{\_syscall(SPADMON\_PROC\_NR, modo, \&m)}, em que \texttt{modo} deve ser substituído pelas constantes definidas em \texttt{callnr.h} e \texttt{m} deve ser instanciado como uma das messages descritas anteriormente, que possibilitam a passagem de parâmetros para a syscall, como os argumentos do \texttt{padmon} ou retornos do \texttt{spadmon}.
+
+\subsubsection{Coleta de informações dos processos}
+
+Para o processamento do \texttt{padmon -ps}, precisamos obter as informações da tabela de processos que, no Minix, é dividida em três partes: uma parte é definida e atualizada no kernel, outra no serviço PM e outra no VFS. As três tabelas são implementadas como arrays de structs(\texttt{struct mproc} no \texttt{PM}, \texttt{fproc} no \texttt{VFS} e \texttt{proc} no kernel) e as do PM e do kernel têm atributos relevantes para determinar os estados de processo solicitados nesse projeto portanto precisamos de acesso às tabelas. Esse acesso foi garantido pelo uso de uma syscall do Minix chamada \texttt{getsysinfo} que permite solicitar dados ao sistema. Utilizamos essa syscall para solicitar uma cópia de cada uma das tabelas necessárias.
+
+Tendo acesso aos processos do sistema, o \texttt{spadmon} itera sobre a tabela de processos do PM e, através da leitura de cada \texttt{struct mproc}, avalia se o slot do array está em uso e, em caso afirmativo, avalia o estado do processo e insere o \texttt{pid} do processo e seu estado em arrays auxiliares.
+
+Ao final da iteração pelo array de \texttt{mprocs}, o \texttt{spadmon} deve escrever o que foi salvo nos arrays auxiliares nos endereços de memória passados pelo \texttt{padmon} através das mensagens, como detalhado anteriormente. Um problema é que o \texttt{spadmon} não tem permissão para escrever num endereço de memória reservado para outro processo, então para isso precisamos chamar outra syscall que cuida dessa escrita. A syscall em questão é a \texttt{sys\_datacopy}, que recebe como parâmetros o que é para ser escrito, onde é para ser escrito e os dois processos envolvidos (no caso o \texttt{spadmon} e o \texttt{padmon}).
+
+\subsubsection{Mudança de estado dos processos}
+
+Para mudar os estados dos processo já não é suficiente uma cópia da tabela de processos, precisamos alterar a tabela de fato. Para tal, criamos uma nova syscall dentro do serviço \texttt{PM}. O processo de criação foi equivalente a criação das syscalls do \texttt{spadmon} já descritas: 
+
+\begin{enumerate}
+\item 	Adicionamos o número da syscall em \texttt{minix/include/minix/callnr.h};
+\item 	Adicionamos o arquivo no qual definimos a syscall (\texttt{spadmon.c}) no makefile 		   do \texttt{pm minix/servers/pm/makefile}; 
+\item	Adicionamos a assinatura da função em \texttt{minix/servers/pm/proto.h};
+\item	Relacionamos o número da syscall com a sua função em 						     		 \texttt{minix/servers/pm/table.c}
+\item	Desenvolvemos a função de fato no arquivo \texttt{spadmon.c}
+\end{enumerate}
+
+Para a chamada dessa syscall utilizamos a mesma mensagem utilizada na chamada do \texttt{spadmon (mess\_1)}, mas desta vez utilizamos um inteiro para armazenar o PID do processo que desejamos mudar o estado, e outro inteiro para armazenar o estado para o qual queremos mudar o processo.
+
+Dentro da syscall no PM a primeira coisa que fazemos é iterar sobre o array de \texttt{mprocs} buscando o processo de PID dado. Se o processo não for encontrado a syscall já retorna um inteiro indicando que não foi encontrado nenhum processo com PID passado.
+	
+    Se a função encontra o processo desejado, ela então deve verificar o estado do processo. Para isso utilizamos um procedimento semelhante ao descrito para o processamento do \texttt{padmon -ps}: por estarmos no PM já temos acesso direto a sua tabela de processos, então requisitamos uma cópia da tabela do kernel e usamos as informações das duas para identificar o estado do processo.
+	
+    Para o caso de o processo já estar no estado para o qual a mudança foi solicitada, a syscall retorna um valor indicando esse erro. Caso contrário, o serviço deve mudar o processo para o estado solicitado.
+    
+	Alterar o valor dos estados traz outro problema, pois não é possível alterar a tabela de processos do kernel com cópia da mesma. Para resolver o problema criamos uma kernelcall para de fato alterar os valores da tabela. Descreveremos a seguir a criação da kernelcall.
+
+\subsubsection{Criação da Kernel Call}
+
+Seguindo um tutorial \cite{criar_kernel_call:wikiMinix3}, foi possível criar uma kernel call para alterar a tabela proc do kernel, que contém informações sobre os estados dos processos, com flags e uma fila de “runeables”. Foi necessário criar uma função que realiza a mudança das flags e da fila. Caso as \texttt{flags == 0}, o programa é runeble e está na fila. Se não, o oposto.
+
+O protótipo dessa função deve ser adicionado em \texttt{/minix/kernel/system.h} e a função dentro de \texttt{/kernel/system/}, com a inserção de seu nome no \texttt{/kernel/system/Makefile.inc}.
+
+O mapeamento da kernal call é feito em \texttt{/minix/kernel/system.c} , incluindo a seguinte linha: \texttt{map(SYS\_SPADMON\_RUN\_SWAP, do\_spadmon\_run\_swapl);} O protótipo de \texttt{SYS\_SPADMON\_RUN\_SWAP} é inserido em \texttt{/minix/include/minix/syslib.h}.
+
+O número da chamada é incluído em \texttt{/minix/include/minix/com.h} com \texttt{\# define SYS\_SPADMON\_RUN\_SWAP (KERNEL\_CALL + 58)} e incrementando o valor de \texttt{NR\_SYS\_CALLS}.
+
+A implementação da função que chama a kernel call foi feita em \texttt{/minix/lib/libsys/sys\_spadmon\_run\_s wap.c}, passando os parâmetros em uma message e chamando a kernel call por \texttt{\_kernel\_call(SYS\_SPADMON\_RUN\_SWAP, \&m)}. Coloque também o novo arquivo no Makefile da pasta.
+
+\subsection{Testes de Validação}
+Para auxiliar na validação do implementado, criou-se os testes:
+
+\begin{enumerate}
+\item Ao utilizar-se \texttt{padmon -ps} antes e depois de executar \texttt{vi \&} e verificar se o número de processos é incrementado;
+\item Criou-se um processo e obteve-se seu PID, usando \texttt{padmon} alterou-se o estado deste processo para todos os estados disponíveis e verificou-se a mudança efetiva de status, por fim finalizou-se o processo com \texttt{padmon -e} e verificou-se se este deixou a lista de processos;
+\item Verificou-se o uso da verbosidade comparando a saída de todas as funções fornecidas com e sem a flag \texttt{v} setada;
+\item Verificou-se se \texttt{padmon -v -t \$pid}, \texttt{padmon -vt \$pid} e \texttt{padmon -t \$pid -v} possuem o mesmo retorno;
+\item Confirma se \texttt{padmon} chama a syscall do\texttt{spadmon};
+\item Verifica se \texttt{padmon -help} retorna algo.
+\end{enumerate}
+
+Além disso, criou-se testes que esperam erro, como opções e argumentos inválidos.
+
+%==========Conclusão
+\section{Conclusão}
+O projeto foi concluido implementando todas as funcionalidades exigidas pelo enunciado. Desde a listagem até a mudança de estado dos processos. Essas tarefas foram realizadas através da criação de um server (spadmon), uma syscall do PM e uma kernelcall. Ainda ocorrem erros inesperados algum tempo depois de alterar os estados dos processos (como vfs error e kernel panic) pois somente a mudança das flags afetam o funcionamento do sistema operacional. Configuramos também o CI para rodar os testes criados pelo grupo.
+
+% ========= Referências
+\renewcommand\refname{Referências}
+\begin{thebibliography}{1}
+
+\bibitem{getopt:DaemoioLabs}
+\url{https://daemoniolabs.wordpress.com/2011/10/07/usando-com-as-funcoes-getopt-e-getopt_long-em-c/}
+
+\bibitem{service_tutorial:Heabuh}
+\url{https://blog.heabuh.com/jekyll/update/2016/11/13/minix-service-tutorial.html}
+
+\bibitem{implementar_syscall:exercicio}
+\url{http://homepages.cs.ncl.ac.uk/nick.cook/csc2025/minix/syscall-exercise1.html}
+
+\bibitem{tabelas_processos:wiki.minix3}
+\url{http://wiki.minix3.org/doku.php?id=developersguide:kernelapi#sys_getinfo}
+
+\bibitem{tabelas_processos:Heabuh}
+\url{https://blog.heabuh.com/jekyll/update/2016/11/29/minix-getsysinfo.html}
+
+\bibitem{estados_tabela:usp}
+\url{www.pcs.usp.br/~jkinoshi/2007/r2-6.doc}
+
+\bibitem{tabelas_processos_minix:cis}
+\url{http://www.cis.syr.edu/~wedu/seed/Documentation/Minix2/Process_Tables.pdf}
+
+\bibitem{tabelas_kernel_e_pm:condor}
+\url{http://condor.depaul.edu/glancast/443class/docs/lecOct05.html}
+
+\bibitem{criar_kernel_call:wikiMinix3}
+\url{http://wiki.minix3.org/doku.php?id=developersguide:newkernelcall}
+
+\end{thebibliography}
+
+\end{document}
+
+
