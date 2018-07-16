@@ -1,0 +1,98 @@
+\documentclass[12pt,journal,compsoc]{IEEEtran}
+
+\usepackage{indentfirst}
+\usepackage{microtype}
+\usepackage{hyperref}
+
+\usepackage[utf8]{inputenc}
+\usepackage[portuguese]{babel}
+\usepackage{float}
+\restylefloat{table}
+
+\begin{document}
+% ========= Cabeçalho
+
+\markboth{MC504 - Sistemas Operacionais, 21 de junho de 2018}%
+{Shell \MakeLowercase{\textit{et al.}}: Escalonamento de Processos em Minix\\Relatório do Projeto 3}
+
+\title{Administração de processos em Minix\\Relatório do Projeto 3}
+\author{Diogo~T.~Sant'Anna,~\IEEEmembership{RA~169966,}
+        Luciano~G.~Zago,~\IEEEmembership{RA~182835,}
+        e~Maria~A.~Paulino,~\IEEEmembership{RA~183465}
+}
+\maketitle
+
+% ========= Resumo
+\begin{abstract}
+	Este projeto teve por objetivo promover a familiarização com alguns modos de escalonamento estudados e alterar o sistema de escalonamento de processos do Minix. Para tal, foi  requerido projetar e implementar uma solução de software que seja capaz de administrar os processos de um sistema operacional e agendá-los segundo uma política baseada em parentesco. Os processos pais devem se executar em \textit{Round Robin} e seus filhos em \textit{First Come First Serve}. O projeto exigiu conhecimentos sobre como o Minix executa a distribuição de processos ao escalonador e sobre os métodos de escalonamento utilizados. Por fim, foi possível desenvolver uma solução capaz de executar todas as funções exigidas no enunciado deste projeto.
+\end{abstract}
+
+\IEEEdisplaynotcompsoctitleabstractindextext
+
+\IEEEpeerreviewmaketitle
+
+% ========= Introdução
+\section{Introdução}
+\IEEEPARstart{N}este projeto desenvolveu-se um administrador para coordenar a atuação de dois escalonadores, também implementados pelo grupo. Os últimos possuem políticas e aplicações distintas
+\begin{itemize}
+	\item \textit{Round Robin}(RR): O algoritmo atribui frações de tempo (\textit{quantum}) para cada processo, em partes iguais, de forma circular (o que elimina o problema de inanição). O processo é interrompido (preempção) quando se esgota o \textit{quantum}\cite{DefRoundRobin:Wiki}. Após isso, se executa o próximo processo da fila circular. Este deve ser atribuído à processos que têm \textit{shell} como pai.
+    \item \textit{First Come First Serve}(FCFS): Cria uma fila de execução de processos por ordem de chegada. O processo que chegou antes é executado por completo (sem preempção), após o término de sua execução, o mesmo acontece com o próximo da fila. Como se trata de uma fila, todos os processos tendem a ser executados (evita a inanição), a não ser que ocorra algum erro ou loop infinito, pois como não existe preempção, não pode interromper o processo para executar o próximo\cite{DefFCFS:Wiki}. Este deve ser atribuído à processos que não têm como pai \textit{shell}.
+\end{itemize}
+
+% ========= Desenvolvimento
+\section{Desenvolvimento}
+	Sabendo que todos os processos de usuários são encaminhados para o servidor SCHED do Minix, implementamos os escalonadores e a administração deles no próprio SCHED e parte no PM.
+    
+    O arquivo \texttt{schedule.c} do servidor SCHED implementa as funções \texttt{do\_start\_scheduling} e \texttt{do\_stop\_scheduling}, que são chamadas pelo Minix solicitando que o SCHED escalone e pare de escalonar um processo de usuário, respectivamente. Foram essas duas principais funções que usamos para implementar nossos escalonadores.
+
+	Na função \texttt{do\_start\_scheduling} nós identificamos o processo como pai ou filho e administramos seu escalonamento da seguinte forma: se o novo processo for um filho de INIT ou de RS (representando um processo de sistema), nós o tomamos como um processo pai e o escalonamos de acordo com a política do \textit{Round Robin}; caso contrário, nós o tomamos como um processo filho e o escalonamos segundo a política do \textit{First Come First Serve}(FCFS).
+
+\subsection{Implementação dos Escalonadores}
+	Atualmente o algoritmo \textit{Round Robin} já está implementado no \textit{scheduler} do Minix, porém com multi-prioridades\cite{MinixSched:Minix3}. Portanto, iremos utilizar o algoritmo já implementado no server \textit{"sched"}, apenas alternando a distribuição de prioridade para que todos os processos tenham a mesma prioridade.
+    
+    Para implementar a política de escalonamento FCFS, no próprio \textit{do\_start\_scheduling} nós verificamos se não há nenhum processo filho já escalonado, nesse caso imediatamente escalonamos o novo processo e indicamos que um processo filho já está escalonado. Caso contrário, nós apenas o adicionamos numa fila simples para que esse processo seja escalonado em alguma chamada do \textit{do\_stop\_scheduling}.
+    
+No \textit{do\_stop\_scheduling}, portanto, nós também verificamos se o processo finalizado é um processo filho. Em caso afirmativo, verificamos se há algum processo filho na fila esperando para ser executado e, em caso afirmativo, nós pegamos o primeiro elemento da fila e o escalonamos.
+
+    
+\subsection{Administrador de Escalonadores}
+	Segundo o enunciado deste projeto, o administrador deve selecionar a política usada para cada processo de acordo com o descrito anteriormente. Por praticidade e simplicidade, decidimos fazer com que os filhos de INIT sejam tomados como os pais, escalonados sob a política Round-Robin, e os demais processos processos sejam tomados como filhos, escalonados sob a política FCFS.
+	Um problema que surgiu com essa decisão vem do fato de que muito dos filhos de INIT tem outros processos filhos. Caso que gera inanição ao passo que os filhos imediatos de INIT podem esperar o término da execução de seus filhos para prosseguir a sua própria execução, mas a política de escalonamento FCFS impõe que outros processos possam vir a rodar somente quando o processo em execução seja finalizado, então esses filhos nunca serão executados. Para viabilizar a utilização do FCFS da maneira como foi proposta, precisamos criar algumas exceções para que o sistema operacional pelo menos completasse o \textit{boot}. Essas exceções foram tratadas verificando os novos processos e alterando o parentesco dos que causam problemas no processo de inicialização do sistema, fazendo com que o SCHED os interprete como filhos do INIT.
+    Foi preciso modificar o servidor PM para implementar essas exceções, uma vez que somente nesse servidor nós temos acesso ao nome dos processos executados. A principal exceção a ser tratada foi o processo \textit{sh}, que corresponde ao \textit{shell} do minix e é filho direto do INIT, o que faria com que todos os filhos de \textit{sh} fossem escalonados com FCFS, impedindo que quaisquer filhos do \textit{shell} tenham filhos. Portanto, alteramos o parentesco de todos os processos filhos do \textit{shell} indicando que são filhos direto de INIT, para que então sejam escalonados com Round Robin. Sob a mesma justificativa, redirecionamos os filhos dos processos \texttt{sshd}, \texttt{inetd}, \texttt{syslogd} e \texttt{dhcpcd}(por serem processos \textit{daemons} do sistema) como sendo filhos direto de INIT.
+	Quanto ao seu desenvolvimento, o arquivo \texttt{schedule.c} do servidor PM realiza mudanças no parentesco de determinados processos, para facilitar a verificação posterior no servidor SCHED. A vantagem do servidor PM é conhecer o nome dos processos que serão executados. Dessa forma, os processos de nome \texttt{sshd}, \texttt{inetd}, \texttt{syslogd} e \texttt{dhcpcd}, por serem processos \textit{daemons} do sistema, são tratados de forma especial mesmo sendo filhos de \textit{shell} e, portanto, são colocador no escalonador RR, através da mudança do pai para \texttt{INIT\_PROC\_NR}.
+        
+\subsection{Testes e Validação}
+	Foram realizados 2 testes principais com o objetivo de verificar a utilização dos escalonadores desenvolvidos. O primeiro tem por objetivo observar o \textit{Round Robin}, e através de um script chama dois processos paralelamente, passando como parâmetro um identificador para cada um desses que por sua vez imprimem seu identificador. O primeiro processo chamado tem propositalmente tempo total de execução muito superior ao segundo, porém devido à política de escalonamento, o menor deve terminar antes mostrando assim que o propósito do RR foi atendido.
+   
+   Já o segundo, explicita o funcionamento do FCFS. Consiste em um script chamando um único processo, que por sua vez realiza duas vezes o comando \texttt{fork()}, criando assim dois filhos e cada um deles, assim como no teste descrito anteriormente, imprime o seu identificador. Tendo em vista a política do escalonador, o primeiro a ser criado deve ser executado completamente antes do início da execução do segundo, apesar de possuir tempo total de execução superior.
+
+
+%==========Conclusão
+\section{Conclusão}
+	O projeto foi concluído implementando os modos de escalonamento exigidas pelo enunciado. Os processos pais se executam em \textit{Round Robin} e seus filhos em FCFS. Essas tarefas foram realizadas através da edição do server \textit{sched} e do PM. Foi possível conhecer o gerenciador de escalonamento do Minix e os métodos de escalonamento utilizados. Configuramos também o CI para rodar os testes criados pelo grupo. Por fim, foi possível desenvolver uma solução capaz de executar todas as funções exigidas no enunciado deste projeto.
+
+% ========= Referências
+\renewcommand\refname{Referências}
+\begin{thebibliography}{1}
+
+\bibitem{DefRoundRobin:Wiki}
+\url{https://pt.wikipedia.org/wiki/Round-robin}
+
+\bibitem{DefFCFS:Wiki}
+\url{https://pt.wikipedia.org/wiki/FIFO_(escalonamento)}
+
+\bibitem{MinixSched:Minix3}
+\url{http://wiki.minix3.org/doku.php?id=developersguide:userspacescheduling}
+
+\bibitem{MinixShed:Condor}
+\url{http://condor.depaul.edu/glancast/443class/docs/lecOct12.html#slide18}
+
+\bibitem{ArtigoEnunciado:Tanenbaum}
+\url{http://www.minix3.org/docs/scheduling/report.pdf }
+
+
+\end{thebibliography}
+
+\end{document}
+
+
